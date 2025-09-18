@@ -51,6 +51,12 @@ resource "aws_s3_bucket_public_access_block" "this" {
 }
 
 # Start of - S3 Logging Bucket Configuration
+############################################
+# 1. Create Logging Bucket
+# 2. Enable Encryption in Logging Bucket
+# 3. Block Public Access to Logging Bucket
+# 4. Enable Logging for Main Bucket
+############################################
 resource "aws_s3_bucket" "logging" {
   count = local.create_logging_bucket
 
@@ -61,16 +67,10 @@ resource "aws_s3_bucket" "logging" {
   }
 }
 
-resource "aws_s3_bucket_logging" "this" {
-  count = var.enable_logging == true ? 1 : 0
-
-  bucket        = aws_s3_bucket.this.id
-  target_bucket = local.logging_bucket_name
-  target_prefix = "${local.logging_bucket_name}/"
-}
-
 resource "aws_s3_bucket_server_side_encryption_configuration" "logging" {
-  bucket = aws_s3_bucket.logging.id
+  count = local.create_logging_bucket
+
+  bucket = aws_s3_bucket.logging[count.index].id
 
   rule {
     apply_server_side_encryption_by_default {
@@ -81,11 +81,21 @@ resource "aws_s3_bucket_server_side_encryption_configuration" "logging" {
 }
 
 resource "aws_s3_bucket_public_access_block" "logging" {
-  bucket = aws_s3_bucket.logging.id
+  count = local.create_logging_bucket
+
+  bucket = aws_s3_bucket.logging[count.index].id
 
   block_public_acls       = true
   block_public_policy     = true
   ignore_public_acls      = true
   restrict_public_buckets = true
+}
+
+resource "aws_s3_bucket_logging" "this" {
+  count = var.enable_logging == true ? 1 : 0
+
+  bucket        = aws_s3_bucket.this.id
+  target_bucket = local.logging_bucket_name
+  target_prefix = "${local.logging_bucket_name}/"
 }
 # End of - S3 Logging Bucket Configuration
