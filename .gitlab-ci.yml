@@ -1,0 +1,94 @@
+default:
+  image: registry.gitlab.com/gitlab-org/terraform-images/stable:latest
+  cache:
+    key: aws-s3-cache
+    paths:
+      - ${TF_ROOT}/.terraform
+  before_script:
+    - cd ${TF_ROOT}
+
+variables:
+  TF_ROOT: ${CI_PROJECT_DIR}
+
+stages:
+  - prepare
+  - format
+  - validate
+  - build
+  - checkov
+
+init:
+  stage: prepare
+  script:
+    - gitlab-terraform init
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+format:
+  stage: format
+  script:
+    - terraform fmt -check -diff
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+validate:
+  stage: validate
+  script:
+    - gitlab-terraform validate
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+plan:
+  stage: build
+  script:
+    - gitlab-terraform plan
+    - gitlab-terraform plan-json
+  artifacts:
+    name: plan
+    paths:
+      - ${TF_ROOT}/plan.cache
+    reports:
+      terraform: ${TF_ROOT}/plan.json
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+
+checkov:
+  stage: checkov
+  tags:
+    - docker
+  image:
+    name: bridgecrew/checkov:latest
+    entrypoint:
+      - '/usr/bin/env'
+      - 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: always
+    - if: $SAST_DISABLED
+      when: never
+  script:
+    # Use `script` to emulate `tty` for colored output.
+    - script -q -c 'checkov --framework terraform  -d . --download-external-modules false; echo $? > CKVEXIT'
+    - exit $(cat CKVEXIT)
+  allow_failure: true
+
+apply:
+  before_script:
+    - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@git.plansource.com".insteadOf https://git.plansource.com
+    - cat ~/.gitconfig
+  stage: deploy
+  environment:
+    name: sharedservices
+  script:
+    - echo "Applying changes to shared services account"
+    - gitlab-terraform apply
+  dependencies:
+    - plan
+  rules:
+  - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    when: manual
