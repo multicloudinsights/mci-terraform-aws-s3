@@ -15,8 +15,8 @@ locals {
         { days = 30, storage_class = "STANDARD_IA" },
         { days = 90, storage_class = "GLACIER" },
       ]
-      expiration_days                        = 365
-      noncurrent_version_expiration_days     = 90
+      expiration_days                    = 365
+      noncurrent_version_expiration_days = 90
       noncurrent_version_transitions = [
         { noncurrent_days = 30, storage_class = "STANDARD_IA" },
       ]
