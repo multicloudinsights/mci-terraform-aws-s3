@@ -1,9 +1,10 @@
 default:
   image: registry.gitlab.com/gitlab-org/terraform-images/stable:latest
   cache:
-    key: aws-s3-cache
+    key: "${CI_COMMIT_REF_SLUG}-terraform"
     paths:
       - ${TF_ROOT}/.terraform
+    policy: pull
   before_script:
     - cd ${TF_ROOT}
 
@@ -11,35 +12,60 @@ variables:
   TF_ROOT: ${CI_PROJECT_DIR}
 
 stages:
+  - static-analysis
   - prepare
-  - format
   - validate
   - build
-  - checkov
+  - deploy
 
-init:
-  stage: prepare
-  script:
-    - gitlab-terraform init
+.on_relevant_events: &on_relevant_events
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
 
 format:
-  stage: format
+  stage: static-analysis
   script:
     - terraform fmt -check -diff
+  <<: *on_relevant_events
+
+checkov:
+  stage: static-analysis
+  tags:
+    - docker
+  image:
+    name: bridgecrew/checkov:latest
+    entrypoint:
+      - '/usr/bin/env'
+      - 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
   rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    - if: $SAST_DISABLED
+      when: never
     - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+      when: always
+  script:
+    # Use `script` to emulate `tty` for colored output.
+    - script -q -c 'checkov --framework terraform -d . --download-external-modules false; echo $? > CKVEXIT'
+    - exit $(cat CKVEXIT)
+  allow_failure: true
+
+init:
+  stage: prepare
+  cache:
+    key: "${CI_COMMIT_REF_SLUG}-terraform"
+    paths:
+      - ${TF_ROOT}/.terraform
+    policy: push
+  script:
+    - gitlab-terraform init
+  <<: *on_relevant_events
 
 validate:
   stage: validate
   script:
     - gitlab-terraform validate
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  <<: *on_relevant_events
 
 plan:
   stage: build
@@ -52,36 +78,13 @@ plan:
       - ${TF_ROOT}/plan.cache
     reports:
       terraform: ${TF_ROOT}/plan.json
-  rules:
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-
-checkov:
-  stage: checkov
-  tags:
-    - docker
-  image:
-    name: bridgecrew/checkov:latest
-    entrypoint:
-      - '/usr/bin/env'
-      - 'PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
-  rules:
-    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
-      when: always
-    - if: $SAST_DISABLED
-      when: never
-  script:
-    # Use `script` to emulate `tty` for colored output.
-    - script -q -c 'checkov --framework terraform  -d . --download-external-modules false; echo $? > CKVEXIT'
-    - exit $(cat CKVEXIT)
-  allow_failure: true
+  <<: *on_relevant_events
 
 apply:
-  before_script:
-    - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@git.plansource.com".insteadOf https://git.plansource.com
-    - cat ~/.gitconfig
   stage: deploy
+  before_script:
+    - cd ${TF_ROOT}
+    - git config --global url."https://gitlab-ci-token:${CI_JOB_TOKEN}@git.plansource.com".insteadOf https://git.plansource.com
   environment:
     name: sharedservices
   script:
@@ -90,5 +93,5 @@ apply:
   dependencies:
     - plan
   rules:
-  - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
-    when: manual
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+      when: manual
